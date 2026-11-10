@@ -1,16 +1,5 @@
-"""Build per-method control flow graphs (CFG) and data flow graphs (DFG) for a Java project.
+"""Java front-end (tree-sitter-java).
 
-Same graph model and output format as build_graphs.py (Django), using tree-sitter-java.
-Scope: every `<module>/src/main/java/**/*.java` file (production code of all modules; tests,
-examples outside src/main/java and generated sources are excluded).
-
-Usage:
-    python src/build_graphs_java.py --project activemq --versions 5.0.0
-
-Outputs (output/<project>-<version>/): graphs.jsonl, metrics.csv, files.csv, manifest.json
-
-Java specifics
---------------
 * Graph units: method and constructor bodies, including methods of nested, local and anonymous
   classes (qualname e.g. `BrokerService.start`, `Outer.method.<anon>.run`). Abstract/interface
   methods without a body have no graph and are only counted in the manifest.
@@ -22,24 +11,11 @@ Java specifics
   uses, not definitions. Plain names without a reaching definition (mostly fields) go to
   free_vars. Bodies of anonymous classes are not part of the enclosing method's defs/uses.
 """
-import argparse
-import csv
-import datetime as dt
-import json
-import sys
-from importlib.metadata import version as pkg_version
-from pathlib import Path
-
 import tree_sitter_java as tsj
-from tree_sitter import Language, Parser
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from build_graphs import count_errors, def_use_edges  # noqa: E402  (shared reaching-definitions)
-
-ROOT = Path(__file__).resolve().parents[1]
-SOURCES = ROOT / "sources"
-OUTPUT = ROOT / "output"
-PARSER = Parser(Language(tsj.language()))
+from codegraphs.cfg import CFGBuilder
+from codegraphs.languages.base import Language
+from codegraphs.syntax import first_line, names
 
 METHOD_TYPES = {"method_declaration", "constructor_declaration", "compact_constructor_declaration"}
 TYPE_DECLS = {"class_declaration", "interface_declaration", "enum_declaration",
@@ -107,42 +83,17 @@ def du(*nodes):
     return defs, uses
 
 
-def names(nodes):
-    return sorted({n.text.decode("utf8", "replace") for n in nodes})
-
-
-def first_line(node, limit=120):
-    return node.text.decode("utf8", "replace").split("\n", 1)[0].strip()[:limit]
-
-
 # ----------------------------------------------------------------------------------------------
-# CFG construction
+# CFG
 # ----------------------------------------------------------------------------------------------
-class MethodGraph:
+class JavaCFG(CFGBuilder):
     def __init__(self, m):
-        self.nodes, self.edges = [], set()
         self.loops = []       # continue targets: {"target": id, "label": str|None}
         self.breakables = []  # {"label": str|None, "breaks": [(id, lab)]}
         self.pending_label = None
-        self.entry = self._node("ENTRY", m, self._params(m), [], text="ENTRY")
-        self.exit = self._node("EXIT", m, [], [], text="EXIT")
-        outs = self.block(m.child_by_field_name("body"), [(self.entry, "")], 0)
-        self.connect(outs, self.exit)
+        super().__init__(m)
 
-    def _node(self, kind, ts, defs, uses, text=None, depth=0):
-        nid = len(self.nodes)
-        self.nodes.append({"id": nid, "kind": kind, "line": ts.start_point[0] + 1,
-                           "end_line": ts.end_point[0] + 1,
-                           "text": text if text is not None else first_line(ts),
-                           "defs": defs, "uses": uses, "depth": depth})
-        return nid
-
-    def connect(self, preds, nid):
-        for p, lab in preds:
-            self.edges.add((p, nid, lab))
-
-    @staticmethod
-    def _params(m):
+    def param_names(self, m):
         ps = m.child_by_field_name("parameters")
         out = []
         if ps is not None:
@@ -367,116 +318,47 @@ class MethodGraph:
 
 
 # ----------------------------------------------------------------------------------------------
-# driver
+# Language implementation
 # ----------------------------------------------------------------------------------------------
-def iter_methods(root):
-    """Yield (method_node, qualname) for every method/constructor, incl. nested/anonymous classes."""
-    stack = [(root, [])]
-    while stack:
-        n, scope = stack.pop()
-        for c in reversed(n.children):
-            t = c.type
-            if t in METHOD_TYPES:
-                nm = c.child_by_field_name("name")
-                name = nm.text.decode("utf8", "replace") if nm is not None else "<init>"
-                yield c, ".".join(scope + [name])
-                stack.append((c, scope + [name]))
-            elif t in TYPE_DECLS:
-                nm = c.child_by_field_name("name")
-                stack.append((c, scope + [nm.text.decode("utf8", "replace") if nm is not None else "<anon>"]))
-            elif t == "object_creation_expression" and any(x.type == "class_body" for x in c.children):
-                stack.append((c, scope + ["<anon>"]))
-            else:
-                stack.append((c, scope))
+class JavaLanguage(Language):
+    name = "java"
+    grammar_package = "tree-sitter-java"
+    kind_counts = (
+        ("n_if", ("if",)),
+        ("n_loops", ("for", "while")),  # do-while counted via its while node
+        ("n_switch", ("switch",)),
+        ("n_case", ("case",)),
+        ("n_try", ("try",)),
+        ("n_except", ("except",)),
+        ("n_sync", ("synchronized",)),
+        ("n_return", ("return_statement",)),
+        ("n_raise", ("throw_statement",)),
+    )
 
+    def ts_language(self):
+        return tsj.language()
 
-def metrics(g, dfg, free, m):
-    kinds = [x["kind"] for x in g.nodes]
-    n_nodes, n_edges = len(g.nodes), len(g.edges)
-    return {
-        "loc": m.end_point[0] - m.start_point[0] + 1,
-        "cfg_nodes": n_nodes, "cfg_edges": n_edges, "cyclomatic": n_edges - n_nodes + 2,
-        "n_if": kinds.count("if"),
-        "n_loops": kinds.count("for") + kinds.count("while"),  # do-while counted via its while node
-        "n_switch": kinds.count("switch"), "n_case": kinds.count("case"),
-        "n_try": kinds.count("try"), "n_except": kinds.count("except"),
-        "n_sync": kinds.count("synchronized"),
-        "n_return": kinds.count("return_statement"), "n_raise": kinds.count("throw_statement"),
-        "max_depth": max(x["depth"] for x in g.nodes),
-        "dfg_edges": len(dfg),
-        "n_defs": sum(len(x["defs"]) for x in g.nodes),
-        "n_uses": sum(len(x["uses"]) for x in g.nodes),
-        "n_vars": len({v for x in g.nodes for v in x["defs"]}),
-        "n_free_vars": len(free), "n_params": len(g.nodes[0]["defs"]),
-        "has_parse_error": int(m.has_error),
-    }
+    def iter_functions(self, root):
+        """Methods/constructors, incl. nested, local and anonymous classes (`<anon>`)."""
+        stack = [(root, [])]
+        while stack:
+            n, scope = stack.pop()
+            for c in reversed(n.children):
+                t = c.type
+                if t in METHOD_TYPES:
+                    nm = c.child_by_field_name("name")
+                    name = nm.text.decode("utf8", "replace") if nm is not None else "<init>"
+                    yield c, ".".join(scope + [name]), c
+                    stack.append((c, scope + [name]))
+                elif t in TYPE_DECLS:
+                    nm = c.child_by_field_name("name")
+                    stack.append((c, scope + [nm.text.decode("utf8", "replace") if nm is not None else "<anon>"]))
+                elif t == "object_creation_expression" and any(x.type == "class_body" for x in c.children):
+                    stack.append((c, scope + ["<anon>"]))
+                else:
+                    stack.append((c, scope))
 
-
-def source_files(vroot):
-    return sorted(p for p in vroot.rglob("*.java")
-                  if "/src/main/java/" in "/" + p.relative_to(vroot).as_posix())
-
-
-def process(project, version):
-    vroot = SOURCES / f"{project}-{version}"
-    if not vroot.is_dir():
-        sys.exit(f"missing {vroot}; run src/download_sources.py --project {project} --versions {version}")
-    out = OUTPUT / f"{project}-{version}"
-    out.mkdir(parents=True, exist_ok=True)
-    files = source_files(vroot)
-    mrows, frows, n_abstract = [], [], 0
-    with open(out / "graphs.jsonl", "w", encoding="utf8") as gj:
-        for f in files:
-            rel = f.relative_to(vroot).as_posix()  # e.g. activemq-core/src/main/java/org/...
-            src = f.read_bytes()
-            tree = PARSER.parse(src)
-            nf = 0
-            for m, qual in iter_methods(tree.root_node):
-                if m.child_by_field_name("body") is None:
-                    n_abstract += 1
-                    continue
-                g = MethodGraph(m)
-                dfg, free = def_use_edges(g)
-                ident = {"version": version, "filepath": rel, "method_name": qual.split(".")[-1],
-                         "qualname": qual, "line_start": m.start_point[0] + 1,
-                         "line_end": m.end_point[0] + 1}
-                gj.write(json.dumps({**ident, "has_parse_error": bool(m.has_error), "nodes": g.nodes,
-                                     "cfg_edges": sorted(g.edges), "dfg_edges": dfg,
-                                     "free_vars": free}) + "\n")
-                mrows.append({**ident, **metrics(g, dfg, free, m)})
-                nf += 1
-            frows.append({"version": version, "filepath": rel, "n_functions": nf,
-                          "n_error_nodes": count_errors(tree.root_node), "bytes": len(src)})
-    for name, rows in (("metrics.csv", mrows), ("files.csv", frows)):
-        with open(out / name, "w", newline="", encoding="utf8") as fh:
-            w = csv.DictWriter(fh, fieldnames=list(rows[0].keys()))
-            w.writeheader()
-            w.writerows(rows)
-    manifest = {
-        "project": project, "version": version,
-        "source_dir": f"sources/{project}-{version}/**/src/main/java",
-        "n_files": len(files),
-        "n_files_with_parse_errors": sum(r["n_error_nodes"] > 0 for r in frows),
-        "n_functions": len(mrows),
-        "n_functions_with_parse_errors": sum(r["has_parse_error"] for r in mrows),
-        "n_bodiless_methods_skipped": n_abstract,
-        "python": sys.version.split()[0],
-        "tree_sitter": pkg_version("tree-sitter"),
-        "tree_sitter_java": pkg_version("tree-sitter-java"),
-        "created_utc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
-    }
-    (out / "manifest.json").write_text(json.dumps(manifest, indent=2))
-    print(json.dumps(manifest))
-
-
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--project", required=True)
-    ap.add_argument("--versions", nargs="+", required=True)
-    a = ap.parse_args()
-    for v in a.versions:
-        process(a.project, v)
-
-
-if __name__ == "__main__":
-    main()
+    def build_cfg(self, fn):
+        if fn.child_by_field_name("body") is None:  # abstract / interface method
+            return None
+        return JavaCFG(fn)

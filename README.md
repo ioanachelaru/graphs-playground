@@ -20,7 +20,7 @@ Projects:
 - **Graphs (per function/method):**
   - CFG: statement-level nodes.
   - DFG: variable definition → use edges from reaching definitions over the CFG.
-  - Both languages share the same model and output format (`build_graphs_java.py` reuses the reaching-definitions code).
+  - Both languages share the same model, data-flow code and output format.
 - **Outputs (`output/<project>-<version>/`):** graphs and metrics, keyed by `filepath`, `method_name`, `qualname`, `line_start` and `line_end`, so they can be joined to method-level bug labels (or pooled per file for file-level labels).
 
 ## Log
@@ -34,25 +34,55 @@ Projects:
   - The median method has 3 CFG nodes, because there are many getters and setters.
   - `graphs.jsonl` is 17.3 MB.
 - Calcite was considered but dropped.
+- **Refactor:** the per-language scripts became the `codegraphs` package (shared core plus one module per language) with unit tests. Re-running it gave the same outputs; only line endings changed (now LF everywhere).
 
 ## Reproduce
 
 ```powershell
-python -m pip install -r requirements.txt                 # Python 3.11; pinned versions
-.\run_pipeline.ps1 -Project django   -Versions 1.0        # or -Versions 1.0,1.1,...
+python -m pip install -r requirements.txt                 # Python 3.11; exact versions used for output/
+.\run_pipeline.ps1 -Project django   -Versions 1.0        # or -Versions 1.0,1.1,... or -All
 .\run_pipeline.ps1 -Project activemq -Versions 5.0.0
 ```
 
-`run_pipeline.ps1` runs three steps:
+`run_pipeline.ps1` runs `python -m codegraphs run`, which does three steps for each version: **download**, then **build**, then **view**. Each step can also be run on its own, from the repo root:
 
-1. `src/download_sources.py --project <p> --versions ...` downloads the tag archives. It skips versions that are already present; use `--force` to re-download, or `--all` for every known version.
-2. The graph builder writes `output/<project>-<version>/`:
-   - `src/build_graphs.py` for Django; `src/build_graphs_java.py --project activemq` for Java.
-   - `graphs.jsonl`: nodes, `cfg_edges`, `dfg_edges` and `free_vars` per function.
-   - `metrics.csv`: per-function metrics. Java adds `n_switch`, `n_case` and `n_sync` columns.
-   - `files.csv`: parse status per file.
-   - `manifest.json`: counts and tool versions.
-3. `src/build_viewer.py --project <p> --versions ...` writes `output/<project>-<version>/viewer.html`.
+```powershell
+$env:PYTHONPATH = "src"        # or: pip install -e .[dev]  (then just `codegraphs ...`)
+python -m codegraphs download --project django --versions 1.0     # --force to re-download, --all for every version
+python -m codegraphs build    --project django --versions 1.0
+python -m codegraphs view     --project django --versions 1.0
+python -m pytest              # graph-construction tests
+```
+
+`build` writes `output/<project>-<version>/`:
+
+- `graphs.jsonl`: nodes, `cfg_edges`, `dfg_edges` and `free_vars` per function;
+- `metrics.csv`: per-function metrics. Java adds `n_switch`, `n_case` and `n_sync`;
+- `files.csv`: parse status per file;
+- `manifest.json`: scope, counts and tool versions.
+
+`view` writes `viewer.html` into the same folder. Text outputs use LF line endings on every OS, so runs on different machines give identical files.
+
+## Code structure
+
+```
+src/codegraphs/
+  projects.py       project registry: GitHub repo, tag format, versions, language, source scope
+  download.py       release-tag archive download
+  languages/
+    base.py         Language interface (parser, iter_functions, build_cfg, metric columns)
+    python.py       Python front-end (CFG builder + def/use rules)
+    java.py         Java front-end
+  cfg.py            CFG builder base class (node/edge storage, ENTRY/EXIT)
+  dataflow.py       reaching definitions -> DFG edges (shared by all languages)
+  metrics.py        per-function metrics
+  extract.py        per-version driver: files -> graphs -> output files
+  viewer.py         HTML viewer (template in templates/viewer.html)
+  cli.py            `python -m codegraphs download|build|view|run`
+tests/test_graphs.py  expected CFG/DFG for one sample function per language, project scopes
+```
+
+**Adding a project:** add a `Project` entry in `projects.py`. **Adding a language:** implement `Language` in `languages/<lang>.py` and register it in `languages/__init__.py`.
 
 ## Viewing the graphs
 
@@ -65,7 +95,7 @@ Open `output/<project>-<version>/viewer.html` in a browser, or via GitHub Pages:
   - Toggle between CFG + DFG, CFG only and DFG only. Node positions stay fixed across modes.
   - Hover a node to see its defs and uses.
 - **Links:** the URL hash (`viewer.html#123`) links to a function.
-- Outputs (including the viewers) are committed; they can always be regenerated with `run_pipeline.ps1`.
+- Outputs (including the viewers) are committed; `run_pipeline.ps1` can always regenerate them.
 
 ## Graph details and limitations
 

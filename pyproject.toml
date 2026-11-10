@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codegraphs"
+version = "0.2.0"
+description = "Per-function control flow and data flow graphs from source code (tree-sitter)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "tree-sitter>=0.23,<0.27",
+    "tree-sitter-python>=0.23,<0.26",
+    "tree-sitter-java>=0.23,<0.24",
+    "requests>=2.31",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+codegraphs = "codegraphs.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+codegraphs = ["templates/*.html"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
