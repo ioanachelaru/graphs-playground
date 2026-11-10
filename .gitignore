@@ -221,3 +221,6 @@ __marimo__/
 
 # downloaded Django source archives
 sources/
+
+# Joern installation (scripts/install_joern.py)
+tools/

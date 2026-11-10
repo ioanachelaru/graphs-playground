@@ -4,16 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codegraphs"
-version = "0.2.0"
-description = "Per-function control flow and data flow graphs from source code (tree-sitter)"
-readme = "README.md"
-requires-python = ">=3.10"
-dependencies = [
-    "tree-sitter>=0.23,<0.27",
-    "tree-sitter-python>=0.23,<0.26",
-    "tree-sitter-java>=0.23,<0.24",
-    "requests>=2.31",
-]
+version = "0.3.0"
+description = "Per-function control flow and data dependence graphs from source code (Joern)"
+requires-python = ">=3.10,<3.13"   # lib2to3 was removed in 3.13
+dependencies = ["requests>=2.31"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
@@ -25,7 +19,7 @@ codegraphs = "codegraphs.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-codegraphs = ["templates/*.html"]
+codegraphs = ["templates/*.html", "joern_scripts/*.sc"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

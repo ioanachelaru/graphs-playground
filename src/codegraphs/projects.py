@@ -8,10 +8,11 @@ class Project:
     name: str
     repo: str                       # GitHub "owner/name"
     tag_format: str                 # release tag for a version, e.g. "activemq-{v}"
-    language: str                   # key in codegraphs.languages.LANGUAGES
+    language: str                   # "python" | "java" (selects the Joern frontend)
     include: Callable[[str], bool]  # selects source files by path relative to the version root
     scope: str                      # human-readable description of `include` (for manifests)
     versions: tuple = field(default_factory=tuple)
+    py2_versions: tuple = field(default_factory=tuple)  # converted with 2to3 before parsing
 
     def tag(self, version: str) -> str:
         return self.tag_format.format(v=version)
@@ -35,6 +36,7 @@ PROJECTS = {
             language="python",
             include=_django_include,
             scope="django/ package only",
+            py2_versions=("1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9"),
             versions=("1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9",
                       "2.0", "2.1", "2.2",
                       "3.0", "3.1", "3.2",

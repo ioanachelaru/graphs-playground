@@ -4,13 +4,17 @@
   "tag": "5.1",
   "language": "python",
   "scope": "django/ package only",
+  "extractor": "joern",
+  "joern_frontend": "pythonsrc",
+  "py2to3": false,
   "n_files": 879,
-  "n_files_with_parse_errors": 0,
+  "n_files_not_in_cpg": 0,
+  "n_files_changed_by_2to3": 0,
   "n_functions": 9077,
-  "n_functions_with_parse_errors": 0,
-  "n_bodiless_functions_skipped": 0,
+  "n_synthetic_methods_skipped": 14116,
+  "n_abstract_methods_skipped": 0,
+  "joern": "v4.0.679",
+  "java": "openjdk version \"21.0.10\" 2026-01-20 LTS",
   "python": "3.11.18",
-  "tree_sitter": "0.26.1",
-  "tree_sitter_python": "0.25.0",
-  "created_utc": "2026-11-10T12:19:06+00:00"
+  "created_utc": "2026-11-10T17:52:45+00:00"
 }

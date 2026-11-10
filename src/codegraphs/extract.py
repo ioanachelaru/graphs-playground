@@ -1,103 +1,198 @@
-"""Build graphs for one project version and write output/<project>-<version>/.
+"""Build Joern graphs for one project version and write output/<project>-<version>/.
 
-graphs.jsonl   one JSON object per function: identifiers, nodes, cfg_edges, dfg_edges, free_vars
-metrics.csv    one row per function (see codegraphs.metrics)
-files.csv      one row per source file: n_functions, n_error_nodes, bytes
-manifest.json  scope, counts, tool versions, timestamp
+graphs.jsonl.gz  one JSON object per function (gzip, deterministic bytes):
+                 version, filepath, method_name, qualname, signature, full_name, line_start,
+                 line_end, nodes [{id, kind, line, text, vars_in, vars_out}],
+                 cfg_edges [[src, dst, ""]], dfg_edges [[src, dst, variable]]
+metrics.csv      one row per function (columns below)
+files.csv        one row per in-scope source file: in_cpg, n_functions, bytes, py2to3_changed
+manifest.json    scope, counts, skipped synthetic/abstract methods, tool versions, timestamp
 
-Text outputs use "\\n" line endings on every OS (CSV files use the csv module's standard "\\r\\n"),
-so runs on different machines produce identical files.
+Which Joern methods become graph units
+  Python  every method whose name has no "<": Joern's synthetic <module>, <body>,
+          <metaClassAdapter>, <metaClassCallHandler>, <fakeNew>, <lambda>N are skipped
+  Java    every method except <clinit>, compiler-default constructors (no end line) and
+          abstract/interface methods (ABSTRACT modifier); explicit constructors are <init>
+Line numbers are those of the original source; for 2to3-converted files they are mapped back.
 """
-import csv
 import datetime as dt
 import json
+import shutil
+import subprocess
 import sys
-from importlib.metadata import version as pkg_version
+from collections import Counter
 from pathlib import Path
 
-from codegraphs import dataflow, metrics
-from codegraphs.download import SourceTree
-from codegraphs.languages import get_language
+from codegraphs import joern
+from codegraphs.download import path_order
+from codegraphs.graphio import read_jsonl_gz, write_csv, write_json, write_jsonl_gz
 from codegraphs.projects import Project
-from codegraphs.syntax import count_errors
+
+CONTROL_COLUMNS = (("n_if", "IF"), ("n_while", "WHILE"), ("n_do", "DO"), ("n_for", "FOR"),
+                   ("n_switch", "SWITCH"), ("n_try", "TRY"), ("n_catch", "CATCH"),
+                   ("n_finally", "FINALLY"), ("n_throw", "THROW"), ("n_break", "BREAK"),
+                   ("n_continue", "CONTINUE"))
 
 
-def path_order(rel: str):
-    """Sort key for source paths: case-insensitive per path component, identical on every OS
-    (matches Windows Path ordering used for the first outputs)."""
-    return [part.lower() for part in rel.split("/")]
+# ----------------------------------------------------------------------------------------------
+# method selection and naming
+# ----------------------------------------------------------------------------------------------
+def classify(language: str, rec: dict) -> str:
+    """'keep', 'synthetic' or 'abstract' for one exported Joern method."""
+    name = rec["name"]
+    if language == "python":
+        return "synthetic" if "<" in name else "keep"
+    if name == "<clinit>" or rec["line_end"] is None:
+        return "synthetic"
+    if "ABSTRACT" in rec["modifiers"]:
+        return "abstract"
+    return "keep"
 
 
-def source_files(tree: SourceTree, project: Project) -> list:
-    return sorted((rel for rel in tree.paths() if project.include(rel)), key=path_order)
+def qualname(language: str, rec: dict) -> str:
+    """Python: Class.method / outer.inner; Java: Type.method (nested types as Outer$Inner)."""
+    if language == "python":
+        q = rec["full_name"].split(":", 1)[-1]
+        return q[len("<module>."):] if q.startswith("<module>.") else q
+    td, ns = rec["type_decl"], rec["namespace"]
+    if ns and ns != "<global>" and td.startswith(ns + "."):
+        td = td[len(ns) + 1:]
+    return f"{td}.{rec['name']}"
 
 
-def _write_csv(path: Path, rows: list) -> None:
-    with open(path, "w", newline="", encoding="utf8") as fh:
-        if not rows:
-            return
-        w = csv.DictWriter(fh, fieldnames=list(rows[0].keys()))
-        w.writeheader()
-        w.writerows(rows)
+# ----------------------------------------------------------------------------------------------
+# conversion of one exported method
+# ----------------------------------------------------------------------------------------------
+def convert_method(rec: dict, language: str, version: str, line_map=None) -> dict:
+    def orig(line):
+        if line is None or not line_map:
+            return line
+        return line_map[line] if 0 < line < len(line_map) else line
+
+    index = {n["id"]: i for i, n in enumerate(rec["nodes"])}
+    vin, vout = [set() for _ in index], [set() for _ in index]
+    dfg = []
+    for a, b, var in rec["ddg_edges"]:
+        ia, ib = index[a], index[b]
+        dfg.append([ia, ib, var])
+        vout[ia].add(var)
+        vin[ib].add(var)
+    nodes = [{"id": i, "kind": n["label"], "line": orig(n["line"]),
+              "text": n["code"].split("\n", 1)[0].strip()[:120],
+              "vars_in": sorted(vin[i]), "vars_out": sorted(vout[i])}
+             for i, n in enumerate(rec["nodes"])]
+    return {
+        "version": version,
+        "filepath": rec["filename"].replace("\\", "/"),
+        "method_name": rec["name"],
+        "qualname": qualname(language, rec),
+        "signature": rec["signature"],
+        "full_name": rec["full_name"],
+        "line_start": orig(rec["line_start"]),
+        "line_end": orig(rec["line_end"]),
+        "nodes": nodes,
+        "cfg_edges": sorted([index[a], index[b], ""] for a, b in rec["cfg_edges"]),
+        "dfg_edges": sorted(dfg),
+        "control": rec["control"],
+    }
 
 
-def build(project: Project, version: str, sources_dir: Path, output_dir: Path) -> dict:
-    lang = get_language(project.language)
+def metrics_row(g: dict) -> dict:
+    """Metrics of one converted graph.
+
+    cfg_nodes counts only nodes with at least one CFG edge: parameters (which carry DDG edges
+    only) and the entry nodes of nested function definitions are in `nodes` but not in the CFG.
+    cyclomatic = cfg_edges - cfg_nodes + 2 over that CFG.
+    """
+    kinds = Counter(n["kind"] for n in g["nodes"])
+    in_cfg = {a for a, _, _ in g["cfg_edges"]} | {b for _, b, _ in g["cfg_edges"]}
+    n_nodes, n_edges = len(in_cfg), len(g["cfg_edges"])
+    row = {k: g[k] for k in ("version", "filepath", "method_name", "qualname", "signature",
+                             "line_start", "line_end")}
+    row.update({
+        "loc": (g["line_end"] - g["line_start"] + 1) if g["line_end"] and g["line_start"] else None,
+        "cfg_nodes": n_nodes,
+        "cfg_edges": n_edges,
+        "cyclomatic": n_edges - n_nodes + 2,
+        "dfg_edges": len(g["dfg_edges"]),
+        "n_dfg_vars": len({e[2] for e in g["dfg_edges"]}),
+        "n_params": kinds.get("METHOD_PARAMETER_IN", 0),
+        "n_calls": kinds.get("CALL", 0),
+        "n_return": kinds.get("RETURN", 0),
+    })
+    for col, ctype in CONTROL_COLUMNS:
+        row[col] = g["control"].get(ctype, 0)
+    return row
+
+
+def rewrite_metrics(output_dir: Path, project: Project, version: str) -> int:
+    """Recompute metrics.csv from an existing graphs.jsonl.gz (no Joern needed)."""
+    out = Path(output_dir) / f"{project.name}-{version}"
+    rows = [metrics_row(g) for g in read_jsonl_gz(out / "graphs.jsonl.gz")]
+    write_csv(out / "metrics.csv", rows)
+    print(f"[done] {out / 'metrics.csv'} ({len(rows)} functions)")
+    return len(rows)
+
+
+def _java_version(cfg: joern.JoernConfig) -> str:
+    exe = cfg.java_home / "bin" / "java"
     try:
-        sources = SourceTree(sources_dir, project, version)
-    except FileNotFoundError as e:
-        raise SystemExit(f"{e}; run: python -m codegraphs download "
-                         f"--project {project.name} --versions {version}")
+        r = subprocess.run([str(exe), "-version"], capture_output=True, text=True, timeout=60)
+        return (r.stderr or r.stdout).splitlines()[0].strip()
+    except Exception:
+        return "unknown"
+
+
+# ----------------------------------------------------------------------------------------------
+# driver
+# ----------------------------------------------------------------------------------------------
+def build(project: Project, version: str, sources_dir: Path, output_dir: Path,
+          cfg: joern.JoernConfig, work_dir: Path, keep_work: bool = False) -> dict:
+    lang = project.language
+    st = joern.stage(project, version, sources_dir, work_dir)
+    export = joern.parse_and_export(cfg, lang, st)
+
     out = Path(output_dir) / f"{project.name}-{version}"
     out.mkdir(parents=True, exist_ok=True)
+    cpg_files, graphs, skipped = set(), [], Counter()
+    for rec in joern.read_export(export):
+        if rec["type"] == "file":
+            cpg_files.add(rec["name"].replace("\\", "/"))
+            continue
+        kind = classify(lang, rec)
+        if kind != "keep":
+            skipped[kind] += 1
+            continue
+        fp = rec["filename"].replace("\\", "/")
+        graphs.append(convert_method(rec, lang, version, st.line_maps.get(fp)))
+    graphs.sort(key=lambda g: (path_order(g["filepath"]), g["line_start"] or 0, g["full_name"]))
 
-    files = source_files(sources, project)
-    mrows, frows, n_bodiless = [], [], 0
-    with sources, open(out / "graphs.jsonl", "w", encoding="utf8", newline="\n") as gj:
-        for rel in files:
-            src = sources.read(rel)
-            tree = lang.parse(src)
-            nf = 0
-            for fn, qual, start in lang.iter_functions(tree.root_node):
-                g = lang.build_cfg(fn)
-                if g is None:
-                    n_bodiless += 1
-                    continue
-                dfg, free = dataflow.def_use_edges(g)
-                ident = {
-                    "version": version, "filepath": rel,
-                    "method_name": qual.split(".")[-1], "qualname": qual,
-                    "line_start": start.start_point[0] + 1, "line_end": fn.end_point[0] + 1,
-                }
-                gj.write(json.dumps({
-                    **ident, "has_parse_error": bool(fn.has_error),
-                    "nodes": g.nodes, "cfg_edges": sorted(g.edges),
-                    "dfg_edges": dfg, "free_vars": free,
-                }) + "\n")
-                mrows.append({**ident, **metrics.compute(g, dfg, free, fn, start, lang.kind_counts)})
-                nf += 1
-            frows.append({"version": version, "filepath": rel, "n_functions": nf,
-                          "n_error_nodes": count_errors(tree.root_node), "bytes": len(src)})
-
-    _write_csv(out / "metrics.csv", mrows)
-    _write_csv(out / "files.csv", frows)
+    write_jsonl_gz(out / "graphs.jsonl.gz", graphs)
+    write_csv(out / "metrics.csv", [metrics_row(g) for g in graphs])
+    per_file = Counter(g["filepath"] for g in graphs)
+    frows = [{"version": version, "filepath": rel, "in_cpg": int(rel in cpg_files),
+              "n_functions": per_file.get(rel, 0), "bytes": st.sizes[rel],
+              "py2to3_changed": int(rel in st.line_maps)}
+             for rel in st.files]
+    write_csv(out / "files.csv", frows)
     manifest = {
-        "project": project.name,
-        "version": version,
-        "tag": project.tag(version),
-        "language": lang.name,
-        "scope": project.scope,
-        "n_files": len(files),
-        "n_files_with_parse_errors": sum(r["n_error_nodes"] > 0 for r in frows),
-        "n_functions": len(mrows),
-        "n_functions_with_parse_errors": sum(r["has_parse_error"] for r in mrows),
-        "n_bodiless_functions_skipped": n_bodiless,
+        "project": project.name, "version": version, "tag": project.tag(version),
+        "language": lang, "scope": project.scope, "extractor": "joern",
+        "joern_frontend": joern.FRONTENDS[lang],
+        "py2to3": st.converted,
+        "n_files": len(st.files),
+        "n_files_not_in_cpg": sum(1 for r in frows if not r["in_cpg"]),
+        "n_files_changed_by_2to3": len(st.line_maps),
+        "n_functions": len(graphs),
+        "n_synthetic_methods_skipped": skipped["synthetic"],
+        "n_abstract_methods_skipped": skipped["abstract"],
+        "joern": cfg.version(),
+        "java": _java_version(cfg),
         "python": sys.version.split()[0],
-        "tree_sitter": pkg_version("tree-sitter"),
-        lang.grammar_package.replace("-", "_"): pkg_version(lang.grammar_package),
         "created_utc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
     }
-    with open(out / "manifest.json", "w", encoding="utf8", newline="\n") as fh:
-        fh.write(json.dumps(manifest, indent=2) + "\n")
+    write_json(out / "manifest.json", manifest)
+    if not keep_work:
+        shutil.rmtree(st.root.parent, ignore_errors=True)
     print(json.dumps(manifest))
     return manifest
