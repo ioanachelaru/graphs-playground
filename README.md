@@ -50,7 +50,8 @@ python -m pip install -r requirements.txt                 # Python 3.11; exact v
 $env:PYTHONPATH = "src"        # or: pip install -e .[dev]  (then just `codegraphs ...`)
 python -m codegraphs download --project django --versions 1.0     # --force to re-download, --all for every version
 python -m codegraphs build    --project django --versions 1.0
-python -m codegraphs view     --project django --versions 1.0
+python -m codegraphs view     --project django --versions 1.0     # also refreshes index.html + output/versions.js
+python -m codegraphs index                                        # navigation only
 python -m pytest              # graph-construction tests
 ```
 
@@ -78,7 +79,8 @@ src/codegraphs/
   metrics.py        per-function metrics
   extract.py        per-version driver: files -> graphs -> output files
   viewer.py         HTML viewer (template in templates/viewer.html)
-  cli.py            `python -m codegraphs download|build|view|run`
+  site.py           start page index.html + output/versions.js (navigation between viewers)
+  cli.py            `python -m codegraphs download|build|view|run|index`
 tests/test_graphs.py  expected CFG/DFG for one sample function per language, project scopes
 ```
 
@@ -86,7 +88,11 @@ tests/test_graphs.py  expected CFG/DFG for one sample function per language, pro
 
 ## Viewing the graphs
 
-Open `output/<project>-<version>/viewer.html` in a browser, or via GitHub Pages: `https://ioanachelaru.github.io/graphs-playground/output/<project>-<version>/viewer.html`. The page needs internet access to load Cytoscape.js and dagre from unpkg.com.
+**Start page:** https://ioanachelaru.github.io/graphs-playground/ (GitHub Pages, branch `main`, folder `/ (root)`), or `index.html` locally. It lists every project and version with file, function and parse-error counts, and links to each viewer.
+
+Each viewer has a **version** dropdown (switch to another version of the same project) and an **all projects** link back to the start page. The navigation comes from `output/versions.js`, which every viewer loads, so adding a version only needs `python -m codegraphs index` (run automatically by `view` and `run`), not a rebuild of the existing viewers.
+
+A single viewer is at `output/<project>-<version>/viewer.html`. The page needs internet access to load Cytoscape.js and dagre from unpkg.com.
 
 - **Left panel:** all functions of that version. Filter by file path or qualified name (space-separated terms, e.g. `models/base.py save`).
 - **Right panel:** the selected function's graph.

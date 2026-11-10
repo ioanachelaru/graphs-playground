@@ -89,3 +89,28 @@ def test_loop_carried_definition_reaches_itself():
 ])
 def test_project_scope(project, rel, expected):
     assert PROJECTS[project].include(rel) is expected
+
+
+def test_version_order_is_natural():
+    from codegraphs.site import version_key
+    assert sorted(["1.10", "1.2", "2.0", "1.0"], key=version_key) == ["1.0", "1.2", "1.10", "2.0"]
+    assert sorted(["5.8.0", "5.10.0", "5.0.0"], key=version_key) == ["5.0.0", "5.8.0", "5.10.0"]
+
+
+def test_index_lists_only_versions_with_viewers(tmp_path):
+    from codegraphs.site import build_index
+    out = tmp_path / "output"
+    for name, version, viewer in (("activemq", "5.8.0", True), ("activemq", "5.0.0", True),
+                                  ("django", "1.0", False)):
+        d = out / f"{name}-{version}"
+        d.mkdir(parents=True)
+        (d / "manifest.json").write_text(json.dumps(
+            {"project": name, "version": version, "n_files": 1, "n_functions": 2}))
+        if viewer:
+            (d / "viewer.html").write_text("<html></html>")
+    index = build_index(out)
+    assert [e["version"] for e in index["activemq"]] == ["5.0.0", "5.8.0"]
+    assert "django" not in index
+    page = (tmp_path / "index.html").read_text(encoding="utf8")
+    assert 'href="output/activemq-5.8.0/viewer.html"' in page
+    assert (out / "versions.js").read_text(encoding="utf8").startswith("window.CODEGRAPHS_INDEX = ")
