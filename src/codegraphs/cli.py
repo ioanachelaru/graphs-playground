@@ -61,8 +61,15 @@ def main(argv=None) -> int:
         return 0
     if a.command == "serve":
         handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(a.root))
+        try:
+            server = http.server.ThreadingHTTPServer(("127.0.0.1", a.port), handler)
+        except OSError as e:  # e.g. WinError 10013: port reserved by Windows or held by another program
+            raise SystemExit(f"cannot open port {a.port} ({e}); try another one, e.g. --port 8765")
         print(f"serving {a.root.resolve()} at http://localhost:{a.port}/  (Ctrl+C to stop)")
-        http.server.ThreadingHTTPServer(("127.0.0.1", a.port), handler).serve_forever()
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            pass
         return 0
     project = get_project(a.project)
     versions = list(project.versions) if a.all else a.versions

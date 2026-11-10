@@ -136,7 +136,12 @@ Each version has a folder `output/<project>-<version>/`:
 
 - **Start page:** https://ioanachelaru.github.io/graphs-playground/. This needs GitHub Pages enabled for branch `main`, folder `/ (root)`; `.nojekyll` makes Pages serve the files as they are. The page lists every project and version with file and function counts, files Joern could not parse, and whether 2to3 was used.
 - **Viewer:** each version's `viewer.html` (0.3–3.9 MB) embeds only the list of functions. When you open the first function, it downloads that version's `graphs.jsonl.gz` (6–13 MB) and decompresses it in the browser. This requires:
-  - **HTTP.** Browsers do not let a local `file://` page read other files, so locally run `python -m codegraphs serve` and open http://localhost:8000/.
+  - **HTTP.** Browsers do not let a local `file://` page read other files, so serve the repository locally from its root, then open http://localhost:8000/:
+    - Git Bash: `PYTHONPATH=src python -m codegraphs serve`
+    - PowerShell: `$env:PYTHONPATH="src"; python -m codegraphs serve`
+    - or simply `python -m http.server 8000`.
+
+    If Windows refuses the port (`WinError 10013`, often a port reserved by Hyper-V/WSL; list them with `netsh interface ipv4 show excludedportrange protocol=tcp`), add `--port 8765` and open that port instead.
   - **A recent browser** with `DecompressionStream`: Chrome/Edge 80+, Firefox 113+, Safari 16.4+.
   - **Internet access** for the graph-drawing libraries (Cytoscape.js, dagre) loaded from unpkg.com.
 - **Using the viewer:**
@@ -168,7 +173,7 @@ $env:JAVA_HOME = "C:\path\to\jdk-21"
 
 Rebuilding gives byte-identical `graphs.jsonl.gz`, `metrics.csv` and `files.csv`: this was checked by building Django 1.0 and ActiveMQ 5.0.0 twice. Joern's output is deterministic, and the gzip files are written without timestamps.
 
-Single steps, from the repository root:
+Single steps, from the repository root (PowerShell shown; in Git Bash use `export PYTHONPATH=src` instead of the first line):
 
 ```powershell
 $env:PYTHONPATH = "src"
@@ -177,7 +182,7 @@ python -m codegraphs build    --project django --versions 1.0     # Joern; optio
 python -m codegraphs view     --project django --versions 1.0     # viewer.html, then refreshes index.html and output/versions.js
 python -m codegraphs metrics  --project django --all              # recompute metrics.csv from graphs.jsonl.gz (no Joern)
 python -m codegraphs index                                        # only index.html and output/versions.js
-python -m codegraphs serve                                        # local web server for the viewers
+python -m codegraphs serve                                        # local web server for the viewers (--port to change 8000)
 python -m pytest                                                  # tests (Joern tests run only if JOERN_HOME and JAVA_HOME are set)
 python scripts/crosscheck_lizard.py --project django --version 5.2   # compare `cyclomatic` with lizard (pip install lizard)
 ```
