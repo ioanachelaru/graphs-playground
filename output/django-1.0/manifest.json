@@ -1,0 +1,12 @@
+{
+  "version": "1.0",
+  "source_dir": "sources/django-1.0/django",
+  "n_files": 592,
+  "n_files_with_parse_errors": 1,
+  "n_functions": 4378,
+  "n_functions_with_parse_errors": 1,
+  "python": "3.11.18",
+  "tree_sitter": "0.26.1",
+  "tree_sitter_python": "0.25.0",
+  "created_utc": "2026-11-10T10:12:44+00:00"
+}
