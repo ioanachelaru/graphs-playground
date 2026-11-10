@@ -1,0 +1,16 @@
+{
+  "project": "activemq",
+  "version": "5.8.0",
+  "tag": "activemq-5.8.0",
+  "language": "java",
+  "scope": "**/src/main/java (production code of all modules)",
+  "n_files": 1919,
+  "n_files_with_parse_errors": 0,
+  "n_functions": 20500,
+  "n_functions_with_parse_errors": 0,
+  "n_bodiless_functions_skipped": 1608,
+  "python": "3.11.18",
+  "tree_sitter": "0.26.1",
+  "tree_sitter_java": "0.23.5",
+  "created_utc": "2026-11-10T11:36:40+00:00"
+}
