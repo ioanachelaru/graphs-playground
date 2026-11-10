@@ -1,0 +1,14 @@
+{
+  "project": "activemq",
+  "version": "5.0.0",
+  "source_dir": "sources/activemq-5.0.0/**/src/main/java",
+  "n_files": 1236,
+  "n_files_with_parse_errors": 0,
+  "n_functions": 12485,
+  "n_functions_with_parse_errors": 0,
+  "n_bodiless_methods_skipped": 1071,
+  "python": "3.11.18",
+  "tree_sitter": "0.26.1",
+  "tree_sitter_java": "0.23.5",
+  "created_utc": "2026-11-10T11:00:19+00:00"
+}

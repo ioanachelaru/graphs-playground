@@ -1,10 +1,11 @@
-"""Build a single-page HTML viewer for all graphs of a Django version.
+"""Build a single-page HTML viewer for all graphs of one project version.
 
 Usage:
-    python src/build_viewer.py --versions 1.0
+    python src/build_viewer.py --project django --versions 1.0
+    python src/build_viewer.py --project activemq --versions 5.0.0
 
-Reads  output/django-<version>/graphs.jsonl
-Writes output/django-<version>/viewer.html   (open in a browser; needs internet for the
+Reads  output/<project>-<version>/graphs.jsonl
+Writes output/<project>-<version>/viewer.html   (open in a browser; needs internet for the
        Cytoscape.js / dagre scripts loaded from unpkg.com)
 
 Left: searchable list of all functions (filter by file path or qualified name).
@@ -20,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "output"
 
 TEMPLATE = r"""<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>Django __VERSION__ graphs</title>
+<html><head><meta charset="utf-8"><title>__PROJECT__ __VERSION__ graphs</title>
 <script src="https://unpkg.com/cytoscape@3.30.2/dist/cytoscape.min.js"></script>
 <script src="https://unpkg.com/dagre@0.8.5/dist/dagre.min.js"></script>
 <script src="https://unpkg.com/cytoscape-dagre@2.5.0/cytoscape-dagre.js"></script>
@@ -46,7 +47,7 @@ TEMPLATE = r"""<!DOCTYPE html>
 </div>
 <div id="main">
  <div id="bar">
-  <b>Django __VERSION__</b> &nbsp;
+  <b>__PROJECT__ __VERSION__</b> &nbsp;
   <label><input type="radio" name="mode" value="both" checked> CFG + DFG</label>
   <label><input type="radio" name="mode" value="cfg"> CFG only</label>
   <label><input type="radio" name="mode" value="dfg"> DFG only</label>
@@ -142,11 +143,11 @@ KEEP = ("filepath", "qualname", "line_start", "line_end", "has_parse_error",
 NODE_KEEP = ("id", "kind", "line", "text", "defs", "uses")
 
 
-def build(version):
-    out = OUTPUT / f"django-{version}"
+def build(project, version):
+    out = OUTPUT / f"{project}-{version}"
     src = out / "graphs.jsonl"
     if not src.exists():
-        raise SystemExit(f"missing {src}; run src/build_graphs.py --versions {version} first")
+        raise SystemExit(f"missing {src}; run the graph builder for {project} {version} first")
     graphs = []
     with open(src, encoding="utf8") as fh:
         for line in fh:
@@ -156,16 +157,18 @@ def build(version):
             graphs.append(rec)
     graphs.sort(key=lambda g: (g["filepath"], g["line_start"]))
     data = json.dumps(graphs, separators=(",", ":")).replace("</", "<\\/")
-    html = TEMPLATE.replace("__VERSION__", version).replace("__DATA__", data)
+    html = TEMPLATE.replace("__PROJECT__", project).replace("__VERSION__", version).replace("__DATA__", data)
     (out / "viewer.html").write_text(html, encoding="utf8")
     print(f"[done] {out / 'viewer.html'} ({len(graphs)} functions, {len(html) / 1e6:.1f} MB)")
 
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--project", required=True)
     ap.add_argument("--versions", nargs="+", required=True)
-    for v in ap.parse_args().versions:
-        build(v)
+    a = ap.parse_args()
+    for v in a.versions:
+        build(a.project, v)
 
 
 if __name__ == "__main__":
