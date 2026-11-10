@@ -114,3 +114,25 @@ def test_index_lists_only_versions_with_viewers(tmp_path):
     page = (tmp_path / "index.html").read_text(encoding="utf8")
     assert 'href="output/activemq-5.8.0/viewer.html"' in page
     assert (out / "versions.js").read_text(encoding="utf8").startswith("window.CODEGRAPHS_INDEX = ")
+
+
+
+def test_source_tree_reads_zip_without_top_folder(tmp_path):
+    import zipfile
+    from codegraphs.download import SourceTree
+    from codegraphs.extract import source_files
+    with zipfile.ZipFile(tmp_path / "django-9.9.zip", "w") as z:
+        z.writestr("django-9.9/", "")
+        z.writestr("django-9.9/django/Utils.py", "a = 1\n")
+        z.writestr("django-9.9/django/db/base.py", "b = 2\n")
+        z.writestr("django-9.9/tests/test_x.py", "c = 3\n")
+    with SourceTree(tmp_path, PROJECTS["django"], "9.9") as tree:
+        files = source_files(tree, PROJECTS["django"])
+        assert files == ["django/db/base.py", "django/Utils.py"]  # case-insensitive order, tests excluded
+        assert tree.read("django/db/base.py") == b"b = 2\n"
+
+
+def test_path_order_is_case_insensitive_per_component():
+    from codegraphs.extract import path_order
+    assert sorted(["a/Zeta.py", "a/b/x.py", "a/alpha.py"], key=path_order) == \
+        ["a/alpha.py", "a/b/x.py", "a/Zeta.py"]

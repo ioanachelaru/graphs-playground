@@ -1,8 +1,12 @@
-"""Download release-tag source archives from GitHub into <sources_dir>/<project>-<version>/."""
+"""Download release-tag source archives from GitHub and read source files from them.
+
+Sources are kept as the downloaded zip, sources/<project>-<version>.zip, and read directly
+from it (no extraction: faster, less disk, and avoids file-system races when creating thousands
+of folders). A previously extracted folder sources/<project>-<version>/ is still supported.
+"""
 import io
 import os
-import shutil
-import tempfile
+import time
 import zipfile
 from pathlib import Path
 
@@ -31,29 +35,89 @@ def fix_ca_env() -> None:
             os.environ.pop(k)
 
 
-def source_dir(sources_dir: Path, project: Project, version: str) -> Path:
+def archive_path(sources_dir: Path, project: Project, version: str) -> Path:
+    return Path(sources_dir) / f"{project.name}-{version}.zip"
+
+
+def legacy_dir(sources_dir: Path, project: Project, version: str) -> Path:
     return Path(sources_dir) / f"{project.name}-{version}"
 
 
+def _retry(fn, attempts: int = 20, delay: float = 0.25):
+    """Retry transient Windows file errors (e.g. antivirus/sandbox briefly holding a file)."""
+    for i in range(attempts):
+        try:
+            return fn()
+        except PermissionError:
+            if i == attempts - 1:
+                raise
+            time.sleep(delay)
+
+
 def download(project: Project, version: str, sources_dir: Path, force: bool = False) -> Path:
-    dest = source_dir(sources_dir, project, version)
-    if dest.exists() and not force:
-        print(f"[skip] {dest} exists")
+    dest = archive_path(sources_dir, project, version)
+    if not force and (dest.exists() or legacy_dir(sources_dir, project, version).is_dir()):
+        print(f"[skip] {project.name} {version} already downloaded")
         return dest
     url = ARCHIVE_URL.format(repo=project.repo, tag=project.tag(version))
     print(f"[get ] {url}")
     fix_ca_env()
     r = requests.get(url, timeout=600)
     r.raise_for_status()
+    zipfile.ZipFile(io.BytesIO(r.content)).testzip()  # fail early on a bad archive
     dest.parent.mkdir(parents=True, exist_ok=True)
-    if dest.exists():
-        shutil.rmtree(dest)
-    # Extract to a temp dir next to dest, then move the archive's single top-level folder.
-    with tempfile.TemporaryDirectory(dir=dest.parent) as tmp:
-        zipfile.ZipFile(io.BytesIO(r.content)).extractall(tmp)
-        tops = [p for p in Path(tmp).iterdir() if p.is_dir()]
-        if len(tops) != 1:
-            raise RuntimeError(f"unexpected archive layout for {project.name} {version}: {tops}")
-        shutil.move(str(tops[0]), str(dest))
-    print(f"[done] {dest}")
+    partial = dest.with_name(dest.name + ".partial")
+    partial.write_bytes(r.content)
+    _retry(lambda: os.replace(partial, dest))
+    print(f"[done] {dest} ({len(r.content) / 1e6:.1f} MB)")
     return dest
+
+
+class SourceTree:
+    """Read-only view of one version's sources: a GitHub tag zip or an extracted folder.
+
+    Paths are POSIX paths relative to the version root (the archive's top folder stripped),
+    e.g. "django/db/models/base.py".
+    """
+
+    def __init__(self, sources_dir: Path, project: Project, version: str):
+        self.zip_path = archive_path(sources_dir, project, version)
+        self.dir_path = legacy_dir(sources_dir, project, version)
+        self._zip = None
+        self._members = {}
+        if self.zip_path.exists():
+            self._zip = zipfile.ZipFile(self.zip_path)
+            tops = {n.split("/", 1)[0] for n in self._zip.namelist() if n.strip("/")}
+            if len(tops) != 1:
+                raise RuntimeError(f"unexpected archive layout in {self.zip_path}: {sorted(tops)[:5]}")
+            for info in self._zip.infolist():
+                rel = info.filename.split("/", 1)[1] if "/" in info.filename else ""
+                if rel and not info.is_dir():
+                    self._members[rel] = info
+        elif not self.dir_path.is_dir():
+            raise FileNotFoundError(f"no sources at {self.zip_path} or {self.dir_path}")
+
+    @property
+    def location(self) -> Path:
+        return self.zip_path if self._zip is not None else self.dir_path
+
+    def paths(self) -> list:
+        if self._zip is not None:
+            return list(self._members)
+        return [p.relative_to(self.dir_path).as_posix()
+                for p in self.dir_path.rglob("*") if p.is_file()]
+
+    def read(self, rel: str) -> bytes:
+        if self._zip is not None:
+            return self._zip.read(self._members[rel])
+        return (self.dir_path / rel).read_bytes()
+
+    def close(self) -> None:
+        if self._zip is not None:
+            self._zip.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()

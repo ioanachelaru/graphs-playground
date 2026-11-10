@@ -6,12 +6,12 @@ Projects:
 
 | Project | Language | Versions | Code used for graphs |
 |---|---|---|---|
-| Django | Python | `1.0` … `4.2` (done: 1.0) | `django/` package only (no tests or docs) |
-| ActiveMQ | Java | `5.0.0` (done) | `<module>/src/main/java` of every module (production code; tests excluded) |
+| Django | Python | `1.0`–`1.9`, `2.0`–`2.2`, `3.0`–`3.2`, `4.0`–`4.2`, `5.0`–`5.2` (22 versions; 1.10 and 1.11 not included) | `django/` package only (no tests or docs) |
+| ActiveMQ | Java | `5.0.0`, `5.1.0`, `5.2.0`, `5.3.0`, `5.8.0` | `<module>/src/main/java` of every module (production code; tests excluded) |
 
 ## Approach
 
-- **Source:** GitHub release-tag archives downloaded into `sources/<project>-<version>/` (gitignored).
+- **Source:** GitHub release-tag archives kept as zips in `sources/<project>-<version>.zip` (gitignored) and read directly, without extraction. Folders extracted by earlier runs (`sources/<project>-<version>/`) are still read.
   - Django tags are `1.0`, `1.1`, … `4.2`; ActiveMQ tags are `activemq-<version>`.
   - Archives come from `https://codeload.github.com/<repo>/zip/refs/tags/<tag>`, because `git clone` was not usable in the sandbox.
 - **Parsers:** [tree-sitter](https://tree-sitter.github.io/) with the Python and Java grammars.
@@ -35,6 +35,13 @@ Projects:
   - `graphs.jsonl` is 17.3 MB.
 - Calcite was considered but dropped.
 - **Refactor:** the per-language scripts became the `codegraphs` package (shared core plus one module per language) with unit tests. Re-running it gave the same outputs; only line endings changed (now LF everywhere).
+- **ActiveMQ 5.1.0–5.8.0:** 1,280–1,919 files and 13,107–20,500 methods; no parse errors.
+- **All Django versions (22):** built in about 6 minutes.
+  - Size grows from 592 files / 4,378 functions (1.0) to 883 files / 9,266 functions (5.2).
+  - Parse errors in 1.1–1.4: 2 functions, both in bundled Python 2 code (`django/test/_doctest.py` `DocTestRunner.__run` and `django/utils/simplejson/encoder.py` `_make_iterencode`).
+  - 1.9: one file error in `django/conf/app_template/apps.py`. This is a project template with `{{ }}` placeholders, not valid Python, and contains no functions.
+  - Versions 1.5–5.2 otherwise have no errors.
+- **Downloader:** sources are no longer extracted. On the sandboxed Windows machine, creating thousands of folders hit transient file-system errors (a just-created folder was briefly invisible) and became very slow. Reading straight from the zip gives byte-identical outputs.
 
 ## Reproduce
 

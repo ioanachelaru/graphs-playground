@@ -16,15 +16,20 @@ from importlib.metadata import version as pkg_version
 from pathlib import Path
 
 from codegraphs import dataflow, metrics
-from codegraphs.download import source_dir
+from codegraphs.download import SourceTree
 from codegraphs.languages import get_language
 from codegraphs.projects import Project
 from codegraphs.syntax import count_errors
 
 
-def source_files(vroot: Path, project: Project) -> list:
-    return sorted(p for p in vroot.rglob("*") if p.is_file()
-                  and project.include(p.relative_to(vroot).as_posix()))
+def path_order(rel: str):
+    """Sort key for source paths: case-insensitive per path component, identical on every OS
+    (matches Windows Path ordering used for the first outputs)."""
+    return [part.lower() for part in rel.split("/")]
+
+
+def source_files(tree: SourceTree, project: Project) -> list:
+    return sorted((rel for rel in tree.paths() if project.include(rel)), key=path_order)
 
 
 def _write_csv(path: Path, rows: list) -> None:
@@ -38,19 +43,19 @@ def _write_csv(path: Path, rows: list) -> None:
 
 def build(project: Project, version: str, sources_dir: Path, output_dir: Path) -> dict:
     lang = get_language(project.language)
-    vroot = source_dir(sources_dir, project, version)
-    if not vroot.is_dir():
-        raise SystemExit(f"missing {vroot}; run: python -m codegraphs download "
+    try:
+        sources = SourceTree(sources_dir, project, version)
+    except FileNotFoundError as e:
+        raise SystemExit(f"{e}; run: python -m codegraphs download "
                          f"--project {project.name} --versions {version}")
     out = Path(output_dir) / f"{project.name}-{version}"
     out.mkdir(parents=True, exist_ok=True)
 
-    files = source_files(vroot, project)
+    files = source_files(sources, project)
     mrows, frows, n_bodiless = [], [], 0
-    with open(out / "graphs.jsonl", "w", encoding="utf8", newline="\n") as gj:
-        for f in files:
-            rel = f.relative_to(vroot).as_posix()
-            src = f.read_bytes()
+    with sources, open(out / "graphs.jsonl", "w", encoding="utf8", newline="\n") as gj:
+        for rel in files:
+            src = sources.read(rel)
             tree = lang.parse(src)
             nf = 0
             for fn, qual, start in lang.iter_functions(tree.root_node):
