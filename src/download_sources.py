@@ -21,7 +21,7 @@ SOURCES = ROOT / "sources"
 PROJECTS = {
     "django": {
         "repo": "django/django",
-        "tag": "{v}",  # Django tags have no trailing ".0" patch part: 1.0, 1.1, ... 4.2
+        "tag": "{v}",
         "versions": [
             "1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9", "1.10", "1.11",
             "2.0", "2.1", "2.2", "3.0", "3.1", "3.2", "4.0", "4.1", "4.2",
@@ -30,7 +30,7 @@ PROJECTS = {
     "activemq": {
         "repo": "apache/activemq",
         "tag": "activemq-{v}",  # e.g. activemq-5.0.0
-        "versions": ["5.0.0"],
+        "versions": ["5.0.0", "5.1.0", "5.2.0", "5.3.0", "5.8.0"],
     },
 }
 URL = "https://codeload.github.com/{repo}/zip/refs/tags/{tag}"
