@@ -168,6 +168,28 @@ window.CODEGRAPHS_INDEX = {
    "joern": "v4.0.679"
   },
   {
+   "version": "1.10",
+   "n_files": 850,
+   "n_functions": 7412,
+   "n_files_not_in_cpg": 0,
+   "py2to3": true,
+   "language": "python",
+   "tag": "1.10",
+   "extractor": "joern",
+   "joern": "v4.0.679"
+  },
+  {
+   "version": "1.11",
+   "n_files": 850,
+   "n_functions": 7601,
+   "n_files_not_in_cpg": 0,
+   "py2to3": true,
+   "language": "python",
+   "tag": "1.11",
+   "extractor": "joern",
+   "joern": "v4.0.679"
+  },
+  {
    "version": "2.0",
    "n_files": 838,
    "n_functions": 7569,
