@@ -1,0 +1,21 @@
+{
+  "project": "activemq",
+  "version": "5.8.0",
+  "model": "microsoft/graphcodebert-base",
+  "n_methods": 31885,
+  "code_length": 512,
+  "data_flow_length": 128,
+  "pooling": "mean over all non-padding positions (code tokens, <s>, </s>, data-flow nodes)",
+  "normalized": false,
+  "comments_and_docstrings": "removed (official GraphCodeBERT preprocessing)",
+  "n_code_truncated": 568,
+  "n_dfg_truncated": 364,
+  "n_no_dataflow": 9062,
+  "n_dfg_error": 0,
+  "n_parse_error": 1387,
+  "n_comment_strip_failed": 0,
+  "seconds_features": 212.2,
+  "seconds_embedding": 4795.9,
+  "torch": "2.14.1",
+  "threads": 12
+}
