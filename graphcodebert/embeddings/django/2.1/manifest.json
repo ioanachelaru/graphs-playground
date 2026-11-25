@@ -1,0 +1,21 @@
+{
+  "project": "django",
+  "version": "2.1",
+  "model": "microsoft/graphcodebert-base",
+  "n_methods": 7637,
+  "code_length": 512,
+  "data_flow_length": 128,
+  "pooling": "mean over all non-padding positions (code tokens, <s>, </s>, data-flow nodes)",
+  "normalized": false,
+  "comments_and_docstrings": "removed (official GraphCodeBERT preprocessing)",
+  "n_code_truncated": 135,
+  "n_dfg_truncated": 90,
+  "n_no_dataflow": 455,
+  "n_dfg_error": 25,
+  "n_parse_error": 0,
+  "n_comment_strip_failed": 0,
+  "seconds_features": 33.1,
+  "seconds_embedding": 1139.7,
+  "torch": "2.14.1",
+  "threads": 12
+}
